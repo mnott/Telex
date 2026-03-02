@@ -1,0 +1,30 @@
+{
+  "name": "telex",
+  "version": "0.1.0",
+  "description": "Telegram MCP bridge for Claude Code — bidirectional self-chat via MTProto",
+  "type": "module",
+  "bin": {
+    "telex": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "bun run src/index.ts",
+    "start": "node dist/index.js",
+    "watch": "node dist/index.js watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "kokoro-js": "^1.2.1",
+    "pino": "^9.0.0",
+    "qrcode-terminal": "^0.12.0",
+    "telegram": "^2.26.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  },
+  "keywords": ["telegram", "mcp", "claude-code", "bridge", "mtproto"],
+  "license": "MIT"
+}
