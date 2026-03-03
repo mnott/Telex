@@ -118,7 +118,7 @@ If the build fails, report the compiler error to the user and stop.
 ## Step 4: Configure MCP
 
 Add Telex to `~/.claude.json` pointing to the local build. Using a local path
-(not `npx telex`) ensures Claude Code uses this specific build.
+(not `npx @tekmidian/telex`) ensures Claude Code uses this specific build.
 
 Read the current file first to avoid clobbering existing entries:
 
@@ -149,6 +149,19 @@ Verification:
 ```bash
 cat ~/.claude.json | python3 -c "import json,sys; d=json.load(sys.stdin); print('telex entry:', d.get('mcpServers',{}).get('telex'))"
 ```
+
+Also ensure `~/.claude/settings.json` has `"mcp__telex"` in the `permissions.allow` array.
+Without this, Claude Code will prompt for permission on every tool call.
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__telex"]
+  }
+}
+```
+
+Merge this into the existing `settings.json` — do not overwrite other entries.
 
 ---
 

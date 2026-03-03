@@ -72,6 +72,21 @@ Tell Claude Code:
 
 Claude clones the repo, finds the setup skill, and handles everything autonomously — prerequisites, build, MCP config, watcher daemon, and Telegram authentication. The only thing you do is enter your phone number and verification code when prompted.
 
+### Alternative: npx
+
+If you prefer a traditional install without cloning:
+
+```bash
+npx -y @tekmidian/telex setup
+```
+
+This will:
+1. Add Telex to `~/.claude.json`
+2. Print instructions for starting the watcher and authenticating
+3. Credentials are saved to `~/.telex/auth/` on first `telex watch`
+
+Restart Claude Code. Telex connects automatically from now on.
+
 ### Manual install
 
 ```bash
@@ -143,6 +158,8 @@ You can choose whose voice to use:
 - "Say it as George" or "Use George's voice"
 - "Use Nicole's voice for this"
 
+See the full voice list in the `telegram_tts` section below.
+
 ### Listening Locally (Mac Speakers)
 
 Claude can speak out loud through your Mac — no Telegram needed:
@@ -157,6 +174,8 @@ Put Claude into persistent voice mode so every response comes back as audio auto
 - "Voice mode on" — every Claude response becomes a Telegram voice note
 - "Back to text" — back to normal text messages
 - "Talk to me locally" — every response plays through your speakers
+
+Voice mode is perfect for driving, cooking, or any time you can't look at a screen.
 
 ### Screenshots
 
@@ -175,7 +194,7 @@ Control your Claude sessions from Telegram:
 
 ## MCP tools
 
-Once configured, Claude Code has 20 tools available:
+Once configured, Claude Code has 19 tools available:
 
 | Tool | Description |
 |------|-------------|
@@ -198,7 +217,166 @@ Once configured, Claude Code has 20 tools available:
 | `telegram_switch` | Switch to a different Claude session |
 | `telegram_end_session` | End (close) a Claude session |
 | `telegram_command` | Execute a slash command directly (bypass Telegram round-trip) |
-| `telegram_dictate` | Record audio via Mac microphone and transcribe |
+
+### telegram_status
+
+Takes no parameters. Returns connection state, authenticated phone number, and watcher uptime.
+
+### telegram_send
+
+Sends a text message to your Saved Messages or any contact.
+
+Parameters:
+- `message` (required) — the text to send
+- `recipient` (optional) — username, phone number, chat ID, or display name; omit for Saved Messages
+- `voice` (optional, boolean) — if `true`, send as a TTS voice note instead of text
+
+### telegram_tts
+
+Converts text to speech and sends it as a Telegram voice note.
+
+- Uses [Kokoro-js](https://github.com/hexgrad/kokoro) — 100% local, no internet required after first run
+- The model (~160 MB) is downloaded on first use and cached locally
+- Requires `ffmpeg` for WAV to OGG Opus conversion
+
+Parameters:
+- `text` (required) — text to convert to speech
+- `recipient` (optional) — username, phone number, chat ID, or display name; omit for Saved Messages
+- `voice` (optional) — voice name from the table below; omit to use the configured default
+
+**Available voices (28 total):**
+
+| Category | Voices |
+|----------|--------|
+| American Female | `af_heart`, `af_alloy`, `af_aoede`, `af_bella`, `af_jessica`, `af_kore`, `af_nicole`, `af_nova`, `af_river`, `af_sarah`, `af_sky` |
+| American Male | `am_adam`, `am_echo`, `am_eric`, `am_fenrir`, `am_liam`, `am_michael`, `am_onyx`, `am_puck`, `am_santa` |
+| British Female | `bf_alice`, `bf_emma`, `bf_isabella`, `bf_lily` |
+| British Male | `bm_daniel`, `bm_fable`, `bm_george`, `bm_lewis` |
+
+Default voice: `bm_fable`
+
+### telegram_send_file
+
+Sends a file as a Telegram document, or optionally as inline formatted messages.
+
+Parameters:
+- `filePath` (required) — absolute path to the file
+- `recipient` (optional) — username, phone number, chat ID, or display name; omit for Saved Messages
+- `caption` (optional) — caption text to attach to the file
+- `prettify` (optional, boolean) — if `true`, send the file contents as formatted inline Telegram messages rather than a document attachment; useful for markdown files you want to read in chat
+
+### telegram_receive
+
+Drains all messages buffered for the current session since the last call.
+
+Parameters:
+- `from` (optional) — omit for Saved Messages only, `"all"` for all sources, or a chat ID/name to filter
+
+### telegram_wait
+
+Efficient alternative to polling. Blocks until a message arrives or the timeout expires.
+
+Parameters:
+- `timeoutMs` (optional) — max wait in milliseconds; default 120000, max 300000
+
+Use this when you want Claude to wait while you compose a reply:
+
+```
+"Wait for my next Telegram message before continuing."
+```
+
+### telegram_login
+
+Takes no parameters. Triggers a fresh Telegram authentication flow. Use this if the session has expired or credentials have been revoked.
+
+### telegram_contacts
+
+Lists your Telegram contacts.
+
+Parameters:
+- `search` (optional) — filter by name or username
+- `limit` (optional) — maximum results to return
+
+### telegram_chats
+
+Lists your Telegram chats (groups, channels, and direct messages).
+
+Parameters:
+- `search` (optional) — filter by chat name
+- `limit` (optional, default 50) — maximum results to return
+
+Chat IDs returned here can be passed directly to `telegram_history`.
+
+### telegram_history
+
+Fetches message history for a chat.
+
+Parameters:
+- `chatId` (required) — chat ID, username, or `'me'` for Saved Messages
+- `count` (optional, default 20) — number of messages to return (most recent first)
+
+### telegram_voice_config
+
+Gets or sets the voice mode configuration. Configuration is persisted to `~/.telex/voice-config.json` and survives watcher restarts.
+
+Parameters:
+- `action` (required) — `'get'` to read current config, `'set'` to update it
+- `defaultVoice` (optional) — default voice name (e.g. `'bm_fable'`)
+- `voiceMode` (optional, boolean) — `true` to enable automatic voice responses
+- `localMode` (optional, boolean) — when `true` and `voiceMode` is `true`, use `telegram_speak` (Mac speakers) instead of `telegram_tts` (Telegram voice notes)
+- `personas` (optional) — map of names to voice IDs (e.g. `{"Nicole": "af_nicole", "George": "bm_george"}`)
+
+Default personas: Nicole → `af_nicole`, George → `bm_george`, Daniel → `bm_daniel`, Fable → `bm_fable`
+
+### telegram_speak
+
+Same TTS engine as `telegram_tts`, but plays audio through the Mac's speakers instead of sending a Telegram voice note. No Telegram connection required. Audio plays in the background without blocking other operations.
+
+Parameters:
+- `text` (required) — text to speak aloud
+- `voice` (optional) — voice name (same list as `telegram_tts`); omit to use the configured default
+
+### telegram_rename
+
+Renames the current Claude session (the iTerm2 tab name and session registry entry).
+
+Parameters:
+- `name` (required) — new session name
+
+### telegram_restart
+
+Takes no parameters. Restarts the current Claude session: sends SIGTERM to the Claude process, waits for the shell prompt, then types `claude` to relaunch in the same directory.
+
+### telegram_discover
+
+Takes no parameters. Scans all iTerm2 sessions for running Claude instances, updates the session registry, and prunes stale entries.
+
+### telegram_sessions
+
+Takes no parameters. Returns the full list of registered Claude sessions with their names, indices, and active status.
+
+### telegram_switch
+
+Switches incoming message routing to a different Claude session.
+
+Parameters:
+- `target` (required) — session index (1-based) or a substring of the session name
+
+After switching, all incoming Telegram messages are delivered to the new session.
+
+### telegram_end_session
+
+Closes a Claude session by sending SIGTERM and removing it from the registry.
+
+Parameters:
+- `target` (required) — session index (1-based) or a substring of the session name
+
+### telegram_command
+
+Executes a Telegram slash command directly from Claude without a round-trip through the Telegram app. Useful for scripting session management.
+
+Parameters:
+- `text` (required) — command text, e.g. `/sessions`, `/restart`, `/ss`
 
 ---
 
@@ -239,6 +417,53 @@ Send raw keystrokes to the active iTerm2 session from your phone:
 
 ---
 
+## Multiple sessions
+
+Telex supports multiple simultaneous Claude Code windows. Each MCP server instance registers its `TERM_SESSION_ID` when it starts. The first session to register becomes the active recipient for incoming messages and stays active until explicitly switched or disconnected.
+
+The watcher maintains a separate incoming message queue for each registered session. Use `/N name` from Telegram or `telegram_switch` from MCP to change which session receives incoming messages. Sending a message does **not** automatically change the active session.
+
+Sessions register with a name derived from the working directory (e.g. a Claude session in `~/projects/myapp` registers as `myapp`). Use `/s` to see all sessions and `/N name` to assign a custom name.
+
+Routing is sticky: only the `/N` command changes the active session, not sending a message. This means switching sessions from your phone requires an explicit `/N` command.
+
+---
+
+## Best practices for CLAUDE.md
+
+To get the most out of Telex, add these rules to your `CLAUDE.md` (or `~/.claude/CLAUDE.md` for global config):
+
+### Mirror every response to Telegram
+
+Tell Claude to send the same content it prints on the terminal to Telegram, so you can follow along from your phone:
+
+```
+Every response you give on the terminal MUST also be sent to Telegram via telegram_send.
+Send the same content — do not shorten or paraphrase.
+Adapt markdown for Telegram: use **bold** and *italic* only. No headers, no code blocks.
+```
+
+### Acknowledge before long tasks
+
+If Claude is about to spawn agents, read multiple files, or do anything that takes more than a few seconds, it should send a brief Telegram message **first** — before calling any other tools. Otherwise your phone goes silent and you don't know if Claude heard you.
+
+```
+If a task will take more than a few seconds, your FIRST tool call must be
+telegram_send with a brief acknowledgment (e.g. "On it — researching that now.").
+Then proceed with the actual work. Never leave Telegram silent while working.
+```
+
+### Drain the queue at session start
+
+Messages you send from your phone while Claude is generating a response may be queued. Call `telegram_receive` early in each session to catch them:
+
+```
+At the start of every session, call telegram_receive to drain any queued
+messages that arrived while you were offline.
+```
+
+---
+
 ## Configuration
 
 | Variable | Default | Description |
@@ -246,6 +471,21 @@ Send raw keystrokes to the active iTerm2 session from your phone:
 | `TELEGRAM_API_ID` | _(required)_ | Telegram API ID from my.telegram.org |
 | `TELEGRAM_API_HASH` | _(required)_ | Telegram API hash from my.telegram.org |
 | `TELEX_TTS_VOICE` | `bm_fable` | Default TTS voice |
+
+---
+
+## CLI commands
+
+```bash
+# First-time setup: configure MCP and print authentication instructions
+npx -y @tekmidian/telex setup
+
+# Start the watcher daemon (manages iTerm2 delivery and IPC)
+node dist/index.js watch
+
+# Remove MCP config and stored credentials
+node dist/index.js uninstall
+```
 
 ---
 
@@ -280,7 +520,7 @@ Add to `~/.claude.json`:
   "mcpServers": {
     "telex": {
       "command": "npx",
-      "args": ["-y", "telex"]
+      "args": ["-y", "@tekmidian/telex"]
     }
   }
 }
@@ -331,10 +571,33 @@ The Kokoro model (~160 MB) is downloaded on first use and cached locally. Subseq
 
 ## Security
 
-- Session credentials are stored locally in `~/.telex/`. Treat them like passwords.
+- Session credentials are stored locally in `~/.telex/`. Treat them like passwords — they grant full access to your Telegram session.
 - Telex reads and sends messages via your Saved Messages (self-chat) by default.
 - No data is sent to any third-party service beyond Telegram's servers via MTProto.
 - TTS synthesis is fully local (Kokoro-js runs on-device). Audio never leaves your machine.
+
+---
+
+## Uninstall
+
+```bash
+node dist/index.js uninstall
+```
+
+Or with npx from the published package:
+
+```bash
+npx -y @tekmidian/telex uninstall
+```
+
+This removes Telex from `~/.claude.json` and deletes credentials from `~/.telex/auth/`. To fully clean up:
+
+1. Stop the launchd agent: `scripts/watcher-ctl.sh stop`
+2. Remove the plist: `rm ~/Library/LaunchAgents/com.telex.watcher.plist` (filename may vary — check `scripts/watcher-ctl.sh` for the exact name)
+3. Run the uninstall command above to remove MCP config and auth
+4. Optionally remove `~/.telex/` entirely: `rm -r ~/.telex/`
+
+Restart Claude Code to apply.
 
 ---
 
