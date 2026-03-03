@@ -32,6 +32,24 @@ cmd_start() {
     <string>${session_id}</string>"
   fi
 
+  # Resolve Telegram API credentials from env or ~/.telex/credentials
+  local creds_file="$HOME/.telex/credentials"
+  local tg_api_id="${TELEGRAM_API_ID:-}"
+  local tg_api_hash="${TELEGRAM_API_HASH:-}"
+  if [ -z "$tg_api_id" ] || [ -z "$tg_api_hash" ]; then
+    if [ -f "$creds_file" ]; then
+      # shellcheck disable=SC1090
+      source "$creds_file"
+      tg_api_id="${TELEGRAM_API_ID:-}"
+      tg_api_hash="${TELEGRAM_API_HASH:-}"
+    fi
+  fi
+  if [ -z "$tg_api_id" ] || [ -z "$tg_api_hash" ]; then
+    echo "ERROR: TELEGRAM_API_ID and TELEGRAM_API_HASH must be set."
+    echo "Either export them or put them in ~/.telex/credentials"
+    exit 1
+  fi
+
   # Write plist
   cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -40,6 +58,13 @@ cmd_start() {
 <dict>
   <key>Label</key>
   <string>${LABEL}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>TELEGRAM_API_ID</key>
+    <string>${tg_api_id}</string>
+    <key>TELEGRAM_API_HASH</key>
+    <string>${tg_api_hash}</string>
+  </dict>
   <key>ProgramArguments</key>
   <array>
 ${args_xml}
