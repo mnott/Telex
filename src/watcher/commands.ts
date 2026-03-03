@@ -11,6 +11,8 @@ import {
 import { startTypingIndicator, stopTypingIndicator } from "./typing.js";
 import { saveSessionRegistry } from "./persistence.js";
 import { log } from "./log.js";
+import { router } from "aibroker";
+import { watcherSendMessage } from "./send.js";
 import type { MessageHandler } from "./types.js";
 import {
   typeIntoSession,
@@ -60,6 +62,24 @@ export function createMessageHandler(
       textToDeliver = `[Telex:voice] ${text}`;
     } else {
       textToDeliver = `[Telex] ${text}`;
+    }
+
+    // Check if router has an API backend — if so, deliver via subprocess
+    // and send the response directly back to Telegram (no iTerm2 needed).
+    const backend = router.defaultBackend;
+    if (backend?.type === "api") {
+      log(`API backend active (${backend.name}) — delivering via subprocess`);
+      backend.deliver(textToDeliver).then((response) => {
+        if (response) {
+          watcherSendMessage(response).catch((err) => {
+            log(`Failed to send API backend response: ${err}`);
+          });
+        }
+      }).catch((err) => {
+        log(`API backend deliver error: ${err}`);
+        watcherSendMessage(`Error: ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
+      });
+      return;
     }
 
     // Deliver to active Claude session
