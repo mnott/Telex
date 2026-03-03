@@ -11,9 +11,9 @@ import {
 import { startTypingIndicator, stopTypingIndicator } from "./typing.js";
 import { saveSessionRegistry } from "./persistence.js";
 import { log } from "./log.js";
-import { router, APIBackend } from "aibroker";
+import { router, APIBackend, deliverViaApi } from "aibroker";
 import type { APISession } from "aibroker";
-import { watcherSendMessage } from "./send.js";
+import { watcherSendMessage, watcherSendVoiceNote } from "./send.js";
 import type { MessageHandler } from "./types.js";
 import {
   typeIntoSession,
@@ -67,22 +67,11 @@ export function createMessageHandler(
 
     // Check if router has an API backend — if so, deliver via subprocess
     // and send the response directly back to Telegram (no iTerm2 needed).
-    // Uses the backend's active session ID for context persistence across messages.
     const backend = router.defaultBackend;
-    if (backend?.type === "api") {
-      const activeApiSessionId = (backend instanceof APIBackend)
-        ? backend.activeSessionId
-        : "telex-default";
-      log(`API backend active (${backend.name}) — delivering via subprocess (session: ${activeApiSessionId})`);
-      backend.deliver(textToDeliver, activeApiSessionId).then((response) => {
-        if (response) {
-          watcherSendMessage(response).catch((err) => {
-            log(`Failed to send API backend response: ${err}`);
-          });
-        }
-      }).catch((err) => {
-        log(`API backend deliver error: ${err}`);
-        watcherSendMessage(`Error: ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
+    if (backend instanceof APIBackend) {
+      deliverViaApi(backend, textToDeliver, backend.activeSessionId, {
+        sendText: (text) => watcherSendMessage(text).then(() => {}),
+        sendVoice: (buffer) => watcherSendVoiceNote(buffer).then(() => {}),
       });
       return;
     }
@@ -275,7 +264,12 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
     }
 
     case "/ss":
-    case "/screenshot":
+    case "/screenshot": {
+      const ssBackend = router.defaultBackend;
+      if (ssBackend instanceof APIBackend) {
+        await watcherSendMessage(ssBackend.formatStatus());
+        break;
+      }
       try {
         const { handleScreenshot } = await import("./screenshot.js");
         await handleScreenshot();
@@ -283,6 +277,7 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
         log(`/ss: unhandled error — ${err}`);
       }
       break;
+    }
 
     case "/c": {
       const backend = router.defaultBackend;
