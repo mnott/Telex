@@ -11,8 +11,8 @@ import {
 import { startTypingIndicator, stopTypingIndicator } from "./typing.js";
 import { saveSessionRegistry } from "./persistence.js";
 import { log } from "./log.js";
-import { router, APIBackend, deliverViaApi } from "aibroker";
-import type { APISession } from "aibroker";
+import { router, deliverViaApi, hybridManager } from "aibroker";
+import type { HybridSession } from "aibroker";
 import { watcherSendMessage, watcherSendVoiceNote } from "./send.js";
 import type { MessageHandler } from "./types.js";
 import {
@@ -65,18 +65,17 @@ export function createMessageHandler(
       textToDeliver = `[Telex] ${text}`;
     }
 
-    // Check if router has an API backend — if so, deliver via subprocess
-    // and send the response directly back to Telegram (no iTerm2 needed).
-    const backend = router.defaultBackend;
-    if (backend instanceof APIBackend) {
-      deliverViaApi(backend, textToDeliver, backend.activeSessionId, {
+    // Route based on active session kind
+    const activeHybrid = hybridManager?.activeSession;
+    if (activeHybrid?.kind === "api") {
+      deliverViaApi(hybridManager!.apiBackend, textToDeliver, activeHybrid.backendSessionId, {
         sendText: (text) => watcherSendMessage(text).then(() => {}),
         sendVoice: (buffer) => watcherSendVoiceNote(buffer).then(() => {}),
       });
       return;
     }
 
-    // Deliver to active Claude session
+    // Visual session or no hybrid manager — deliver to iTerm2
     const delivered = deliverMessage(textToDeliver);
 
     if (delivered) {
@@ -200,9 +199,14 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
   const [cmd, ...args] = trimmedText.split(/\s+/);
   const arg = args.join(" ");
 
-  // Guard for commands that need an active iTerm2 session (skip in API mode)
-  const needsSession = ["/c", "/cc", "/esc", "/enter", "/tab", "/up", "/down", "/left", "/right", "/p"].includes(cmd.toLowerCase());
-  if (needsSession && !(router.defaultBackend instanceof APIBackend)) {
+  // Guard for keyboard commands that need a visual session
+  const kbCommands = ["/cc", "/esc", "/enter", "/tab", "/up", "/down", "/left", "/right", "/p"];
+  const needsVisual = kbCommands.includes(cmd.toLowerCase());
+  if (needsVisual) {
+    if (hybridManager?.activeSession?.kind === "api") {
+      await sendToTelegram("Keyboard commands need a visual session. Use /nv to create one.");
+      return;
+    }
     ensureActiveSession();
     if (!activeItermSessionId) {
       await sendToTelegram("No active session.");
@@ -218,19 +222,8 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
 
     case "/s":
     case "/sessions": {
-      const backend = router.defaultBackend;
-      if (backend instanceof APIBackend) {
-        const sessions = backend.listSessions();
-        if (sessions.length === 0) {
-          await watcherSendMessage("No API sessions. Use /n <path> to create one.");
-          break;
-        }
-        const lines = sessions.map((s: APISession, i: number) => {
-          const isActive = s.id === backend.activeSessionId;
-          const cwdDisplay = s.cwd ? ` (${s.cwd})` : "";
-          return `${isActive ? "*" : " "}${i + 1}. ${s.name}${cwdDisplay}`;
-        });
-        await watcherSendMessage(lines.join("\n"));
+      if (hybridManager) {
+        await sendToTelegram(hybridManager.formatSessionList());
         break;
       }
       ensureActiveSession();
@@ -240,17 +233,16 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
 
     case "/n":
     case "/new": {
-      const backend = router.defaultBackend;
-      if (backend instanceof APIBackend) {
-        if (!arg) {
-          await watcherSendMessage("Usage: /n <path>");
-          break;
-        }
+      if (!arg) {
+        await sendToTelegram("Usage: /n <path>");
+        break;
+      }
+      if (hybridManager) {
         const { basename } = await import("node:path");
         const name = basename(arg);
-        const session = backend.createSession(name, arg);
-        log(`/n API mode: created session "${session.name}" (${session.id}) cwd=${session.cwd}`);
-        await watcherSendMessage(`New session: *${session.name}* (${session.cwd})`);
+        const session = hybridManager.createApiSession(name, arg);
+        log(`/n: created API session "${session.name}" (${session.id}) cwd=${session.cwd}`);
+        await sendToTelegram(`New session: *${session.name}* (${session.cwd})`);
         break;
       }
       try {
@@ -263,12 +255,39 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
       break;
     }
 
+    case "/nv": {
+      if (!arg) {
+        await sendToTelegram("Usage: /nv <path>");
+        break;
+      }
+      if (hybridManager) {
+        try {
+          const sessions = await getItermSessions();
+          const itermId = await sessions.createClaudeSession(arg);
+          if (itermId) {
+            const { basename } = await import("node:path");
+            const name = basename(arg);
+            hybridManager.registerVisualSession(name, arg, itermId);
+            setActiveItermSessionId(itermId);
+            log(`/nv: created visual session "${name}" (iTerm2=${itermId})`);
+            await sendToTelegram(`New visual session: *${name}* (${arg})`);
+          }
+        } catch (err) {
+          await sendToTelegram(`Error: ${err}`);
+        }
+      }
+      break;
+    }
+
     case "/ss":
     case "/screenshot": {
-      const ssBackend = router.defaultBackend;
-      if (ssBackend instanceof APIBackend) {
-        await watcherSendMessage(ssBackend.formatStatus());
-        break;
+      if (hybridManager) {
+        const status = hybridManager.formatActiveStatus();
+        if (status !== null) {
+          await sendToTelegram(status);
+          break;
+        }
+        // Visual session — fall through to screenshot
       }
       try {
         const { handleScreenshot } = await import("./screenshot.js");
@@ -280,14 +299,18 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
     }
 
     case "/c": {
-      const backend = router.defaultBackend;
-      if (backend instanceof APIBackend) {
-        backend.clearSession();
-        log("/c API mode: cleared active session conversation history");
-        await watcherSendMessage("Session cleared.");
+      if (hybridManager?.activeSession?.kind === "api") {
+        hybridManager.clearActiveSession();
+        log("/c: cleared API session conversation history");
+        await sendToTelegram("Session cleared.");
         break;
       }
-      // Clear + go (like Whazaa): wait, type /clear, wait, type go
+      // Visual session — clear + go
+      ensureActiveSession();
+      if (!activeItermSessionId) {
+        await sendToTelegram("No active session.");
+        break;
+      }
       try {
         await sendToTelegram("Clearing context...");
         await new Promise(r => setTimeout(r, 10_000));
@@ -369,26 +392,21 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
 
     case "/e":
     case "/end": {
-      const backend = router.defaultBackend;
-      if (backend instanceof APIBackend) {
-        const num = parseInt(arg, 10);
-        if (!num) {
-          await watcherSendMessage("Usage: /e N");
-          break;
-        }
-        const session = backend.getSessionByIndex(num);
+      const num = parseInt(arg, 10);
+      if (!num) {
+        await sendToTelegram("Usage: /e N");
+        break;
+      }
+      if (hybridManager) {
+        const session = hybridManager.getByIndex(num);
         if (!session) {
-          const count = backend.listSessions().length;
-          await watcherSendMessage(`Invalid session number. Use /s to list (1-${count}).`);
+          const count = hybridManager.listSessions().length;
+          await sendToTelegram(`Invalid session number. Use /s to list (1-${count}).`);
           break;
         }
-        const ended = backend.endSession(session.id);
-        if (ended) {
-          log(`/e API mode: ended session "${session.name}" (${session.id})`);
-          await watcherSendMessage(`Ended session *${session.name}*.`);
-        } else {
-          await watcherSendMessage("Failed to end session.");
-        }
+        hybridManager.removeByIndex(num);
+        log(`/e: ended ${session.kind} session "${session.name}" (${session.id})`);
+        await sendToTelegram(`Ended session *${session.name}*.`);
         break;
       }
       await sendToTelegram(`Unknown command: ${cmd}`);
@@ -399,16 +417,18 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
       // Try numeric session switch: /1, /2 name, etc.
       if (/^\/\d+/.test(cmd)) {
         const num = parseInt(cmd.slice(1), 10);
-        const backend = router.defaultBackend;
-        if (backend instanceof APIBackend) {
-          const session = backend.getSessionByIndex(num);
+        if (hybridManager) {
+          const session = hybridManager.switchToIndex(num);
           if (!session) {
-            const count = backend.listSessions().length;
-            await watcherSendMessage(`Invalid session number. Use /s to list (1-${count}).`);
+            const count = hybridManager.listSessions().length;
+            await sendToTelegram(`Invalid session number. Use /s to list (1-${count}).`);
           } else {
-            backend.activeSessionId = session.id;
-            log(`/N API mode: switched active session to "${session.name}" (${session.id})`);
-            await watcherSendMessage(`Switched to *${session.name}*`);
+            if (session.kind === "visual") {
+              setActiveItermSessionId(session.backendSessionId);
+            }
+            const tag = session.kind === "api" ? " [api]" : " [visual]";
+            log(`/N: switched to ${session.kind} session "${session.name}" (${session.id})`);
+            await sendToTelegram(`Switched to *${session.name}*${tag}`);
           }
           break;
         }
@@ -441,7 +461,8 @@ function formatHelp(): string {
     "/h — Help",
     "/s — List sessions",
     "/N [name] — Switch to session N",
-    "/n <path> — New Claude session in directory",
+    "/n <path> — New headless session",
+    "/nv <path> — New visual session (iTerm2)",
     "/e N — End session N",
     "/c — Clear context + go",
     "/cc — Ctrl+C",
