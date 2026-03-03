@@ -66,10 +66,11 @@ export function createMessageHandler(
 
     // Check if router has an API backend — if so, deliver via subprocess
     // and send the response directly back to Telegram (no iTerm2 needed).
+    // Uses "telex-default" as session ID for context persistence across messages.
     const backend = router.defaultBackend;
     if (backend?.type === "api") {
       log(`API backend active (${backend.name}) — delivering via subprocess`);
-      backend.deliver(textToDeliver).then((response) => {
+      backend.deliver(textToDeliver, "telex-default").then((response) => {
         if (response) {
           watcherSendMessage(response).catch((err) => {
             log(`Failed to send API backend response: ${err}`);
