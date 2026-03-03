@@ -231,33 +231,27 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
       break;
     }
 
-    case "/n":
-    case "/new": {
+    case "/nh": {
       if (!arg) {
-        await sendToTelegram("Usage: /n <path>");
+        await sendToTelegram("Usage: /nh <path>");
         break;
       }
       if (hybridManager) {
         const { basename } = await import("node:path");
         const name = basename(arg);
         const session = hybridManager.createApiSession(name, arg);
-        log(`/n: created API session "${session.name}" (${session.id}) cwd=${session.cwd}`);
-        await sendToTelegram(`New session: *${session.name}* (${session.cwd})`);
+        log(`/nh: created API session "${session.name}" (${session.id}) cwd=${session.cwd}`);
+        await sendToTelegram(`New headless session: *${session.name}* (${session.cwd})`);
         break;
-      }
-      try {
-        const sessions = await getItermSessions();
-        await sessions.createClaudeSession();
-        await sendToTelegram("New Claude session created");
-      } catch (err) {
-        await sendToTelegram(`Error: ${err}`);
       }
       break;
     }
 
-    case "/nv": {
+    case "/n":
+    case "/nv":
+    case "/new": {
       if (!arg) {
-        await sendToTelegram("Usage: /nv <path>");
+        await sendToTelegram("Usage: /n <path>");
         break;
       }
       if (hybridManager) {
@@ -269,12 +263,20 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
             const name = basename(arg);
             hybridManager.registerVisualSession(name, arg, itermId);
             setActiveItermSessionId(itermId);
-            log(`/nv: created visual session "${name}" (iTerm2=${itermId})`);
+            log(`/n: created visual session "${name}" (iTerm2=${itermId})`);
             await sendToTelegram(`New visual session: *${name}* (${arg})`);
           }
         } catch (err) {
           await sendToTelegram(`Error: ${err}`);
         }
+        break;
+      }
+      try {
+        const sessions = await getItermSessions();
+        await sessions.createClaudeSession();
+        await sendToTelegram("New Claude session created");
+      } catch (err) {
+        await sendToTelegram(`Error: ${err}`);
       }
       break;
     }
@@ -461,8 +463,8 @@ function formatHelp(): string {
     "/h — Help",
     "/s — List sessions",
     "/N [name] — Switch to session N",
-    "/n <path> — New headless session",
-    "/nv <path> — New visual session (iTerm2)",
+    "/n <path> — New visual session (iTerm2)",
+    "/nh <path> — New headless session",
     "/e N — End session N",
     "/c — Clear context + go",
     "/cc — Ctrl+C",
