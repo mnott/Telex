@@ -11,7 +11,8 @@ import {
 import { startTypingIndicator, stopTypingIndicator } from "./typing.js";
 import { saveSessionRegistry } from "./persistence.js";
 import { log } from "./log.js";
-import { router } from "aibroker";
+import { router, APIBackend } from "aibroker";
+import type { APISession } from "aibroker";
 import { watcherSendMessage } from "./send.js";
 import type { MessageHandler } from "./types.js";
 import {
@@ -66,11 +67,14 @@ export function createMessageHandler(
 
     // Check if router has an API backend — if so, deliver via subprocess
     // and send the response directly back to Telegram (no iTerm2 needed).
-    // Uses "telex-default" as session ID for context persistence across messages.
+    // Uses the backend's active session ID for context persistence across messages.
     const backend = router.defaultBackend;
     if (backend?.type === "api") {
-      log(`API backend active (${backend.name}) — delivering via subprocess`);
-      backend.deliver(textToDeliver, "telex-default").then((response) => {
+      const activeApiSessionId = (backend instanceof APIBackend)
+        ? backend.activeSessionId
+        : "telex-default";
+      log(`API backend active (${backend.name}) — delivering via subprocess (session: ${activeApiSessionId})`);
+      backend.deliver(textToDeliver, activeApiSessionId).then((response) => {
         if (response) {
           watcherSendMessage(response).catch((err) => {
             log(`Failed to send API backend response: ${err}`);
@@ -207,9 +211,9 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
   const [cmd, ...args] = trimmedText.split(/\s+/);
   const arg = args.join(" ");
 
-  // Guard for commands that need an active session
+  // Guard for commands that need an active iTerm2 session (skip in API mode)
   const needsSession = ["/c", "/cc", "/esc", "/enter", "/tab", "/up", "/down", "/left", "/right", "/p"].includes(cmd.toLowerCase());
-  if (needsSession) {
+  if (needsSession && !(router.defaultBackend instanceof APIBackend)) {
     ensureActiveSession();
     if (!activeItermSessionId) {
       await sendToTelegram("No active session.");
@@ -224,13 +228,42 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
       break;
 
     case "/s":
-    case "/sessions":
+    case "/sessions": {
+      const backend = router.defaultBackend;
+      if (backend instanceof APIBackend) {
+        const sessions = backend.listSessions();
+        if (sessions.length === 0) {
+          await watcherSendMessage("No API sessions. Use /n <path> to create one.");
+          break;
+        }
+        const lines = sessions.map((s: APISession, i: number) => {
+          const isActive = s.id === backend.activeSessionId;
+          const cwdDisplay = s.cwd ? ` (${s.cwd})` : "";
+          return `${isActive ? "*" : " "}${i + 1}. ${s.name}${cwdDisplay}`;
+        });
+        await watcherSendMessage(lines.join("\n"));
+        break;
+      }
       ensureActiveSession();
       await sendToTelegram(formatSessions());
       break;
+    }
 
     case "/n":
-    case "/new":
+    case "/new": {
+      const backend = router.defaultBackend;
+      if (backend instanceof APIBackend) {
+        if (!arg) {
+          await watcherSendMessage("Usage: /n <path>");
+          break;
+        }
+        const { basename } = await import("node:path");
+        const name = basename(arg);
+        const session = backend.createSession(name, arg);
+        log(`/n API mode: created session "${session.name}" (${session.id}) cwd=${session.cwd}`);
+        await watcherSendMessage(`New session: *${session.name}* (${session.cwd})`);
+        break;
+      }
       try {
         const sessions = await getItermSessions();
         await sessions.createClaudeSession();
@@ -239,6 +272,7 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
         await sendToTelegram(`Error: ${err}`);
       }
       break;
+    }
 
     case "/ss":
     case "/screenshot":
@@ -250,7 +284,14 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
       }
       break;
 
-    case "/c":
+    case "/c": {
+      const backend = router.defaultBackend;
+      if (backend instanceof APIBackend) {
+        backend.clearSession();
+        log("/c API mode: cleared active session conversation history");
+        await watcherSendMessage("Session cleared.");
+        break;
+      }
       // Clear + go (like Whazaa): wait, type /clear, wait, type go
       try {
         await sendToTelegram("Clearing context...");
@@ -263,6 +304,7 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
         // ignore
       }
       break;
+    }
 
     case "/cc":
       sendKeystrokeToSession(activeItermSessionId, 3); // Ctrl+C
@@ -330,10 +372,52 @@ async function handleSlashCommand(trimmedText: string, originalText: string): Pr
       }
       break;
 
+    case "/e":
+    case "/end": {
+      const backend = router.defaultBackend;
+      if (backend instanceof APIBackend) {
+        const num = parseInt(arg, 10);
+        if (!num) {
+          await watcherSendMessage("Usage: /e N");
+          break;
+        }
+        const session = backend.getSessionByIndex(num);
+        if (!session) {
+          const count = backend.listSessions().length;
+          await watcherSendMessage(`Invalid session number. Use /s to list (1-${count}).`);
+          break;
+        }
+        const ended = backend.endSession(session.id);
+        if (ended) {
+          log(`/e API mode: ended session "${session.name}" (${session.id})`);
+          await watcherSendMessage(`Ended session *${session.name}*.`);
+        } else {
+          await watcherSendMessage("Failed to end session.");
+        }
+        break;
+      }
+      await sendToTelegram(`Unknown command: ${cmd}`);
+      break;
+    }
+
     default:
       // Try numeric session switch: /1, /2 name, etc.
       if (/^\/\d+/.test(cmd)) {
-        const idx = parseInt(cmd.slice(1), 10) - 1;
+        const num = parseInt(cmd.slice(1), 10);
+        const backend = router.defaultBackend;
+        if (backend instanceof APIBackend) {
+          const session = backend.getSessionByIndex(num);
+          if (!session) {
+            const count = backend.listSessions().length;
+            await watcherSendMessage(`Invalid session number. Use /s to list (1-${count}).`);
+          } else {
+            backend.activeSessionId = session.id;
+            log(`/N API mode: switched active session to "${session.name}" (${session.id})`);
+            await watcherSendMessage(`Switched to *${session.name}*`);
+          }
+          break;
+        }
+        const idx = num - 1;
         const sessions = Array.from(sessionRegistry.values());
         if (idx >= 0 && idx < sessions.length) {
           const session = sessions[idx];
@@ -362,7 +446,8 @@ function formatHelp(): string {
     "/h — Help",
     "/s — List sessions",
     "/N [name] — Switch to session N",
-    "/n — New Claude session",
+    "/n <path> — New Claude session in directory",
+    "/e N — End session N",
     "/c — Clear context + go",
     "/cc — Ctrl+C",
     "/esc — Escape",
