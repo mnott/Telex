@@ -143,6 +143,35 @@ export async function watch(rawSessionId?: string): Promise<void> {
     log(`Hub registration failed: ${err instanceof Error ? err.message : String(err)}`);
   });
 
+  // Hub heartbeat — re-register if the daemon restarts
+  const HUB_HEARTBEAT_INTERVAL = 30_000; // 30 seconds
+  const heartbeatTimer = setInterval(async () => {
+    try {
+      const result = await Promise.race([
+        hubClient.call_raw("status", {}),
+        new Promise<null>((_, reject) =>
+          setTimeout(() => reject(new Error("timeout")), 5000),
+        ),
+      ]);
+      if (result === null) throw new Error("null response");
+    } catch {
+      // Hub unreachable — try to re-register
+      log("Hub heartbeat failed — attempting re-registration...");
+      try {
+        hubClient.call_raw("register_adapter", {
+          name: "telex",
+          socketPath: IPC_SOCKET_PATH,
+        }).then(() => {
+          log("Re-registered with AIBroker hub daemon");
+        }).catch((err) => {
+          log(`Hub re-registration failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      } catch {
+        log("Hub still unreachable");
+      }
+    }
+  }, HUB_HEARTBEAT_INTERVAL);
+
   // Discover existing sessions
   try {
     discoverSessions();
@@ -155,6 +184,7 @@ export async function watch(rawSessionId?: string): Promise<void> {
   // Graceful shutdown
   const shutdown = async () => {
     log("Shutting down...");
+    clearInterval(heartbeatTimer);
     hubClient.call_raw("unregister_adapter", { name: "telex" }).catch(() => {});
     stopIpcServer();
     saveStoreCache();
