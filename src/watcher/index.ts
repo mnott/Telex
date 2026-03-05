@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { setLogPrefix, setAppDir, log, router, APIBackend, HybridSessionManager, setHybridManager, startWsGateway, stopWsGateway, WatcherClient, DAEMON_SOCKET_PATH, createBrokerMessage } from "aibroker";
+import { setLogPrefix, setAppDir, log, router, APIBackend, HybridSessionManager, setHybridManager, snapshotAllSessions, startWsGateway, stopWsGateway, WatcherClient, DAEMON_SOCKET_PATH, createBrokerMessage } from "aibroker";
+import { sessionRegistry } from "./state.js";
 import { setCommandHandler } from "./state.js";
 import {
   loadSessionRegistry,
@@ -176,11 +177,22 @@ export async function watch(rawSessionId?: string): Promise<void> {
     log("Embedded mode: started local WsGateway");
   }
 
-  // Discover existing sessions
+  // Discover existing sessions and register them as visual sessions
   try {
-    await discoverSessions();
+    discoverSessions();
   } catch (err) {
     log("Initial session discovery failed:", String(err));
+  }
+
+  // Register discovered iTerm2 sessions in HybridSessionManager
+  const liveSnapshots = snapshotAllSessions();
+  const snapById = new Map(liveSnapshots.map(s => [s.id, s]));
+  for (const [, entry] of sessionRegistry) {
+    if (entry.itermSessionId) {
+      const snap = snapById.get(entry.itermSessionId);
+      const displayName = snap?.tabTitle ?? snap?.profileName ?? snap?.paiName ?? entry.name;
+      manager.registerVisualSession(displayName, "", entry.itermSessionId);
+    }
   }
 
   log("Telex watcher is running. Press Ctrl+C to stop.");

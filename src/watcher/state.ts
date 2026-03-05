@@ -26,6 +26,15 @@ export {
   enqueueContactMessage,
 } from "aibroker";
 
+// ── Adapter Stats ──
+
+export const adapterStats = {
+  messagesReceived: 0,
+  messagesSent: 0,
+  errors: 0,
+  lastMessageAt: null as number | null,
+};
+
 // ── Telegram-Specific State ──
 
 import type { TelegramClient } from "telegram";
