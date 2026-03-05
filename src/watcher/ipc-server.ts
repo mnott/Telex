@@ -652,8 +652,8 @@ function handleHealth(
       ? Math.floor((now - adapterStats.lastMessageAt) / 1000)
       : null;
   respond({
-    status: watcherStatus.connected ? "healthy" : "degraded",
-    connected: watcherStatus.connected,
+    status: watcherStatus.connected ? "ok" : "degraded",
+    connectionStatus: watcherStatus.connected ? "connected" : "disconnected",
     stats: { ...adapterStats },
     lastMessageAgo,
   });
