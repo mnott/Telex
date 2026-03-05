@@ -1,6 +1,7 @@
 import * as net from "node:net";
 import { unlinkSync, existsSync } from "node:fs";
 import { log } from "./log.js";
+import type { WatcherClient } from "aibroker";
 import {
   sessionRegistry,
   activeClientId,
@@ -15,12 +16,10 @@ import {
   watcherClient,
   watcherStatus,
   voiceConfig,
-  setVoiceConfig,
   adapterStats,
 } from "./state.js";
 import {
   saveSessionRegistry,
-  saveVoiceConfig,
   saveStoreCache,
 } from "./persistence.js";
 import { watcherSendMessage, watcherSendFile, watcherSendVoiceNote } from "./send.js";
@@ -33,11 +32,14 @@ import type { IpcRequest, IpcResponse, QueuedMessage } from "./types.js";
 export const IPC_SOCKET_PATH = "/tmp/telex-watcher.sock";
 let server: net.Server | null = null;
 let triggerLoginFn: (() => Promise<void>) | null = null;
+let hubClientRef: WatcherClient | null = null;
 
 export function startIpcServer(
   triggerLogin: () => Promise<void>,
+  hubClient?: WatcherClient,
 ): net.Server {
   triggerLoginFn = triggerLogin;
+  hubClientRef = hubClient ?? null;
 
   // Clean up stale socket
   if (existsSync(IPC_SOCKET_PATH)) {
@@ -179,7 +181,7 @@ async function handleRequest(
         await handleDiscover(respond);
         break;
       case "sessions":
-        handleSessions(sessionId, respond);
+        await handleSessions(sessionId, respond, respondError);
         break;
       case "switch":
         await handleSwitch(params, respond, respondError);
@@ -518,19 +520,17 @@ async function handleTts(
   respond: (r: Record<string, unknown>) => void,
   respondError: (e: string) => void,
 ): Promise<void> {
+  if (!hubClientRef) return respondError("Hub not connected");
   const text = String(params.text ?? "");
   if (!text) return respondError("Text required");
-
-  const voice = params.voice ? String(params.voice) : voiceConfig.defaultVoice;
-  const recipient = params.recipient
-    ? resolveRecipient(String(params.recipient))
-    : undefined;
-
   try {
-    const { textToVoiceNote } = await import("../tts.js");
-    const audioBuffer = await textToVoiceNote(text, voice);
-    const result = await watcherSendVoiceNote(audioBuffer, recipient);
-    respond({ sent: true, voice, ...result });
+    const result = await hubClientRef.call_raw("tts", {
+      text,
+      voice: params.voice ? String(params.voice) : undefined,
+      source: "telex",
+      recipient: params.recipient ? String(params.recipient) : undefined,
+    });
+    respond(result ?? { generated: true });
   } catch (err) {
     respondError(`TTS failed: ${err}`);
   }
@@ -541,15 +541,15 @@ async function handleSpeak(
   respond: (r: Record<string, unknown>) => void,
   respondError: (e: string) => void,
 ): Promise<void> {
+  if (!hubClientRef) return respondError("Hub not connected");
   const text = String(params.text ?? "");
   if (!text) return respondError("Text required");
-
-  const voice = params.voice ? String(params.voice) : voiceConfig.defaultVoice;
-
   try {
-    const { speakLocally } = await import("../tts.js");
-    await speakLocally(text, voice);
-    respond({ speaking: true, voice });
+    const result = await hubClientRef.call_raw("speak", {
+      text,
+      voice: params.voice ? String(params.voice) : undefined,
+    });
+    respond(result ?? { speaking: true });
   } catch (err) {
     respondError(`Speak failed: ${err}`);
   }
@@ -559,22 +559,10 @@ function handleVoiceConfig(
   params: Record<string, unknown>,
   respond: (r: Record<string, unknown>) => void,
 ): void {
-  if (params.action === "set") {
-    const newConfig = { ...voiceConfig };
-    if (params.defaultVoice !== undefined)
-      newConfig.defaultVoice = String(params.defaultVoice);
-    if (params.voiceMode !== undefined)
-      newConfig.voiceMode = Boolean(params.voiceMode);
-    if (params.localMode !== undefined)
-      newConfig.localMode = Boolean(params.localMode);
-    if (params.personas !== undefined)
-      newConfig.personas = params.personas as Record<string, string>;
-    setVoiceConfig(newConfig);
-    saveVoiceConfig();
-    respond(newConfig as unknown as Record<string, unknown>);
-  } else {
-    respond(voiceConfig as unknown as Record<string, unknown>);
-  }
+  if (!hubClientRef) { respond({ error: "Hub not connected" }); return; }
+  hubClientRef.call_raw("voice_config", params)
+    .then((result) => respond(result ?? {}))
+    .catch((err) => respond({ error: String(err) }));
 }
 
 async function handleCommand(
@@ -602,20 +590,25 @@ async function handleDiscover(
     sessionId: s.sessionId,
     active: s.sessionId === activeClientId,
   }));
+  // Forward newly discovered sessions to the hub (best-effort, non-blocking)
+  if (hubClientRef && sessions.length > 0) {
+    hubClientRef.call_raw("sessions", {}).catch(() => {});
+  }
   respond({ sessions });
 }
 
-function handleSessions(
-  currentSessionId: string,
+async function handleSessions(
+  _currentSessionId: string,
   respond: (r: Record<string, unknown>) => void,
-): void {
-  const sessions = Array.from(sessionRegistry.values()).map((s, i) => ({
-    index: i + 1,
-    name: s.name,
-    type: s.sessionId.startsWith("discovered-") ? "discovered" : "registered",
-    active: s.sessionId === activeClientId,
-  }));
-  respond({ sessions });
+  respondError: (e: string) => void,
+): Promise<void> {
+  if (!hubClientRef) { respondError("Hub not connected"); return; }
+  try {
+    const result = await hubClientRef.call_raw("sessions", {});
+    respond(result ?? { sessions: [] });
+  } catch (err) {
+    respondError(String(err));
+  }
 }
 
 async function handleSwitch(
@@ -625,42 +618,13 @@ async function handleSwitch(
 ): Promise<void> {
   const target = String(params.target ?? "");
   if (!target) return respondError("Target required");
-
-  const sessions = Array.from(sessionRegistry.values());
-
-  // Try numeric index (1-based)
-  const idx = parseInt(target, 10);
-  if (!isNaN(idx) && idx >= 1 && idx <= sessions.length) {
-    const session = sessions[idx - 1];
-    setActiveClientId(session.sessionId);
-    if (session.itermSessionId) {
-      setActiveItermSessionId(session.itermSessionId);
-      try {
-        const { typeIntoSession } = await import("./iterm-core.js");
-        // Focus the window
-      } catch {
-        // best effort
-      }
-    }
-    respond({ switched: true, name: session.name });
-    return;
+  if (!hubClientRef) { respondError("Hub not connected"); return; }
+  try {
+    const result = await hubClientRef.call_raw("switch", { target });
+    respond(result ?? { switched: true });
+  } catch (err) {
+    respondError(String(err));
   }
-
-  // Try name substring match
-  const lower = target.toLowerCase();
-  const match = sessions.find((s) =>
-    s.name.toLowerCase().includes(lower),
-  );
-  if (match) {
-    setActiveClientId(match.sessionId);
-    if (match.itermSessionId) {
-      setActiveItermSessionId(match.itermSessionId);
-    }
-    respond({ switched: true, name: match.name });
-    return;
-  }
-
-  respondError(`No session matching "${target}"`);
 }
 
 async function handleEndSession(
@@ -670,52 +634,13 @@ async function handleEndSession(
 ): Promise<void> {
   const target = String(params.target ?? "");
   if (!target) return respondError("Target required");
-
-  const sessions = Array.from(sessionRegistry.values());
-  const idx = parseInt(target, 10);
-
-  let session;
-  if (!isNaN(idx) && idx >= 1 && idx <= sessions.length) {
-    session = sessions[idx - 1];
-  } else {
-    const lower = target.toLowerCase();
-    session = sessions.find((s) =>
-      s.name.toLowerCase().includes(lower),
-    );
+  if (!hubClientRef) { respondError("Hub not connected"); return; }
+  try {
+    const result = await hubClientRef.call_raw("end_session", { target });
+    respond(result ?? { ended: true });
+  } catch (err) {
+    respondError(String(err));
   }
-
-  if (!session) return respondError(`No session matching "${target}"`);
-
-  // Kill the session
-  if (session.itermSessionId) {
-    try {
-      const { killSession } = await import("./iterm-sessions.js");
-      await killSession(session.itermSessionId);
-    } catch {
-      // best effort
-    }
-  }
-
-  // Clean up registry
-  sessionRegistry.delete(session.sessionId);
-  clientQueues.delete(session.sessionId);
-  clientWaiters.delete(session.sessionId);
-
-  // If we just killed the active session, pick another
-  if (activeClientId === session.sessionId) {
-    const remaining = Array.from(sessionRegistry.values());
-    if (remaining.length > 0) {
-      setActiveClientId(remaining[0].sessionId);
-      if (remaining[0].itermSessionId) {
-        setActiveItermSessionId(remaining[0].itermSessionId);
-      }
-    } else {
-      setActiveClientId(null);
-    }
-  }
-
-  saveSessionRegistry();
-  respond({ ended: true, name: session.name });
 }
 
 function handleHealth(
@@ -787,16 +712,53 @@ async function handleDeliver(
       }
 
       case "voice": {
-        if (!text) {
-          sendResponse(sock, { id: reqId, ok: false, error: "payload.text is required for voice delivery" });
+        // Hub may send pre-encoded audio buffer (base64) or text for TTS
+        const voiceB64 = payload.buffer != null ? String(payload.buffer) : "";
+        if (voiceB64) {
+          // Pre-encoded audio from hub — send directly
+          const voiceBuffer = Buffer.from(voiceB64, "base64");
+          const voiceResult = await watcherSendVoiceNote(voiceBuffer, recipient);
+          sendResponse(sock, { id: reqId, ok: true, result: { delivered: true, type: "voice", preEncoded: true, ...voiceResult } });
+        } else if (text) {
+          // Text → TTS → send (fallback)
+          const voice = payload.voice ? String(payload.voice) : voiceConfig.defaultVoice;
+          const { textToVoiceNote } = await import("../tts.js");
+          const audioBuffer = await textToVoiceNote(text, voice);
+          const voiceResult = await watcherSendVoiceNote(audioBuffer, recipient);
+          sendResponse(sock, { id: reqId, ok: true, result: { delivered: true, type: "voice", ...voiceResult } });
+        } else {
+          sendResponse(sock, { id: reqId, ok: false, error: "payload.buffer or payload.text is required for voice delivery" });
           sock.end();
           return;
         }
-        const voice = payload.voice ? String(payload.voice) : voiceConfig.defaultVoice;
-        const { textToVoiceNote } = await import("../tts.js");
-        const audioBuffer = await textToVoiceNote(text, voice);
-        const result = await watcherSendVoiceNote(audioBuffer, recipient);
-        sendResponse(sock, { id: reqId, ok: true, result: { delivered: true, type: "voice", ...result } });
+        break;
+      }
+
+      case "image": {
+        const bufferB64 = payload.buffer != null ? String(payload.buffer) : "";
+        const caption = payload.text ?? payload.caption ?? "Image";
+        if (!bufferB64) {
+          sendResponse(sock, { id: reqId, ok: false, error: "payload.buffer is required for image delivery" });
+          sock.end();
+          return;
+        }
+        if (!watcherClient) {
+          sendResponse(sock, { id: reqId, ok: false, error: "Not connected to Telegram" });
+          sock.end();
+          return;
+        }
+        // Write buffer to temp file — watcherSendFile expects a file path
+        const { writeFileSync, unlinkSync: unlinkTmp } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const { join: joinPath } = await import("node:path");
+        const tmpPath = joinPath(tmpdir(), `telex-img-${Date.now()}.png`);
+        writeFileSync(tmpPath, Buffer.from(bufferB64, "base64"));
+        try {
+          const result = await watcherSendFile(tmpPath, undefined, String(caption));
+          sendResponse(sock, { id: reqId, ok: true, result: { delivered: true, type: "image", ...result } });
+        } finally {
+          try { unlinkTmp(tmpPath); } catch { /* ignore */ }
+        }
         break;
       }
 
