@@ -16,6 +16,7 @@ import {
   watcherStatus,
   voiceConfig,
   setVoiceConfig,
+  adapterStats,
 } from "./state.js";
 import {
   saveSessionRegistry,
@@ -185,6 +186,12 @@ async function handleRequest(
         break;
       case "end_session":
         await handleEndSession(params, respond, respondError);
+        break;
+      case "health":
+        handleHealth(respond);
+        break;
+      case "connection_status":
+        handleConnectionStatus(respond);
         break;
       case "deliver":
         await handleDeliver(socket, id, params);
@@ -709,6 +716,36 @@ async function handleEndSession(
 
   saveSessionRegistry();
   respond({ ended: true, name: session.name });
+}
+
+function handleHealth(
+  respond: (r: Record<string, unknown>) => void,
+): void {
+  const now = Date.now();
+  const lastMessageAgo =
+    adapterStats.lastMessageAt !== null
+      ? Math.floor((now - adapterStats.lastMessageAt) / 1000)
+      : null;
+  respond({
+    status: watcherStatus.connected ? "healthy" : "degraded",
+    connected: watcherStatus.connected,
+    stats: { ...adapterStats },
+    lastMessageAgo,
+  });
+}
+
+function handleConnectionStatus(
+  respond: (r: Record<string, unknown>) => void,
+): void {
+  let status: "connected" | "connecting" | "disconnected" | "error";
+  if (watcherStatus.connected) {
+    status = "connected";
+  } else if (watcherStatus.awaitingCode) {
+    status = "connecting";
+  } else {
+    status = "disconnected";
+  }
+  respond({ status, phoneNumber: watcherStatus.phoneNumber });
 }
 
 // ── Hub deliver handler ──────────────────────────────────────────────────────

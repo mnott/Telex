@@ -15,6 +15,7 @@ import {
   commandHandler,
   contactDirectory,
   chatStore,
+  adapterStats,
 } from "./state.js";
 import type { MessageHandler, TelegramChat } from "./types.js";
 
@@ -175,6 +176,7 @@ export async function connectWatcher(
       try {
         await handleIncomingMessage(event, onMessage);
       } catch (err) {
+        adapterStats.errors++;
         log("Error handling message:", String(err));
       }
     }, new NewMessage({}));
@@ -324,6 +326,9 @@ async function handleIncomingMessage(
 
   // Skip our own outgoing messages tagged with FEFF
   if (text.startsWith("\uFEFF")) return;
+
+  adapterStats.messagesReceived++;
+  adapterStats.lastMessageAt = Date.now();
 
   if (isSelf) {
     // Self-chat (Saved Messages)

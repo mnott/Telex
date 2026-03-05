@@ -131,7 +131,7 @@ export function discoverSessions(): void {
       }
     }
 
-    // Discover sessions with paiName
+    // Discover sessions with paiName and register as visual sessions
     for (const s of snapshot) {
       if (s.paiName && !findByItermId(s.id)) {
         const syntheticId = `discovered-${s.id}`;
@@ -141,6 +141,9 @@ export function discoverSessions(): void {
           itermSessionId: s.id,
           registeredAt: Date.now(),
         });
+        // Register in HybridSessionManager so /s shows visual sessions
+        const displayName = s.tabTitle ?? s.profileName ?? s.paiName;
+        hybridManager?.registerVisualSession(displayName, "", s.id);
       }
     }
 
