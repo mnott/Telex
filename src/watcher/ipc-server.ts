@@ -29,7 +29,7 @@ import { discoverSessions } from "./commands.js";
 import { setItermSessionVar, setItermTabName } from "./iterm-sessions.js";
 import type { IpcRequest, IpcResponse, QueuedMessage } from "./types.js";
 
-const IPC_SOCKET_PATH = "/tmp/telex-watcher.sock";
+export const IPC_SOCKET_PATH = "/tmp/telex-watcher.sock";
 let server: net.Server | null = null;
 let triggerLoginFn: (() => Promise<void>) | null = null;
 
@@ -186,6 +186,9 @@ async function handleRequest(
       case "end_session":
         await handleEndSession(params, respond, respondError);
         break;
+      case "deliver":
+        await handleDeliver(socket, id, params);
+        return; // handleDeliver writes its own response
       default:
         respondError(`Unknown method: ${method}`);
     }
@@ -706,6 +709,85 @@ async function handleEndSession(
 
   saveSessionRegistry();
   respond({ ended: true, name: session.name });
+}
+
+// ── Hub deliver handler ──────────────────────────────────────────────────────
+
+/**
+ * deliver — Hub calls this to deliver a routed BrokerMessage.
+ *
+ * Maps BrokerMessage types to existing Telegram send functions:
+ *   text    -> watcherSendMessage
+ *   voice   -> watcherSendVoiceNote (via TTS)
+ *   command -> commandHandler (runs as if typed in Telegram self-chat)
+ */
+async function handleDeliver(
+  sock: net.Socket,
+  reqId: string,
+  params: Record<string, unknown>,
+): Promise<void> {
+  // BrokerMessage is passed as a plain object
+  const msg = params as Record<string, unknown>;
+  const type = String(msg.type ?? "text");
+  const payload = (msg.payload ?? {}) as Record<string, unknown>;
+  const text = String(payload.text ?? "");
+  const recipient = payload.recipient != null ? String(payload.recipient) : undefined;
+  const timestamp = typeof msg.timestamp === "number" ? msg.timestamp : Date.now();
+
+  log(`IPC: deliver type=${type} from=${msg.source} text=${text.slice(0, 60)}`);
+
+  try {
+    switch (type) {
+      case "text": {
+        if (!text) {
+          sendResponse(sock, { id: reqId, ok: false, error: "payload.text is required for text delivery" });
+          sock.end();
+          return;
+        }
+        const result = await watcherSendMessage(text, recipient);
+        sendResponse(sock, { id: reqId, ok: true, result: { delivered: true, ...result } });
+        break;
+      }
+
+      case "voice": {
+        if (!text) {
+          sendResponse(sock, { id: reqId, ok: false, error: "payload.text is required for voice delivery" });
+          sock.end();
+          return;
+        }
+        const voice = payload.voice ? String(payload.voice) : voiceConfig.defaultVoice;
+        const { textToVoiceNote } = await import("../tts.js");
+        const audioBuffer = await textToVoiceNote(text, voice);
+        const result = await watcherSendVoiceNote(audioBuffer, recipient);
+        sendResponse(sock, { id: reqId, ok: true, result: { delivered: true, type: "voice", ...result } });
+        break;
+      }
+
+      case "command": {
+        if (!text) {
+          sendResponse(sock, { id: reqId, ok: false, error: "payload.text is required for command delivery" });
+          sock.end();
+          return;
+        }
+        const { commandHandler } = await import("./state.js");
+        if (!commandHandler) {
+          sendResponse(sock, { id: reqId, ok: false, error: "commandHandler not initialised" });
+          sock.end();
+          return;
+        }
+        await commandHandler(text, 0, timestamp);
+        sendResponse(sock, { id: reqId, ok: true, result: { delivered: true, type: "command" } });
+        break;
+      }
+
+      default:
+        sendResponse(sock, { id: reqId, ok: false, error: `Unsupported deliver type: ${type}` });
+    }
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    sendResponse(sock, { id: reqId, ok: false, error: errMsg });
+  }
+  sock.end();
 }
 
 // ── Helpers ──
