@@ -10,7 +10,7 @@ One command to set up. Zero cloud dependencies for voice. Works with any Telegra
 
 ## How it works
 
-Telex is a thin **adapter plugin** for the [AIBroker](https://www.npmjs.com/package/aibroker) hub. It does one thing: maintain the GramJS MTProto connection to Telegram and pass messages in and out. All the intelligence - commands, session management, TTS/STT, screenshots, image generation, vision, and MCP tools - lives in the AIBroker daemon.
+Telex is a thin **adapter plugin** for the [AIBroker](https://github.com/mnott/AIBroker) hub. It does one thing: maintain the GramJS MTProto connection to Telegram and pass messages in and out. All the intelligence - commands, session management, TTS/STT, screenshots, image generation, vision, and MCP tools - lives in the AIBroker daemon.
 
 Telex registers with AIBroker on startup via a Unix Domain Socket. If AIBroker is not running, Telex will not function.
 
@@ -74,7 +74,7 @@ Then tell Claude to set it up from the local clone.
 ## Prerequisites
 
 - Node.js >= 18
-- [AIBroker](https://www.npmjs.com/package/aibroker) running as a daemon (required - Telex will not function without it)
+- [AIBroker](https://github.com/mnott/AIBroker) running as a daemon (required - Telex will not function without it)
 - macOS with [iTerm2](https://iterm2.com/)
 - [ffmpeg](https://ffmpeg.org/) for TTS voice note conversion (WAV to OGG Opus)
 - [Whisper](https://github.com/openai/whisper) for voice note transcription (optional - only needed to receive audio/voice messages)
@@ -426,7 +426,7 @@ Telex no longer ships its own MCP server. The AIBroker unified MCP server provid
 }
 ```
 
-See the [AIBroker repo](https://www.npmjs.com/package/aibroker) for full MCP setup instructions.
+See the [AIBroker repo](https://github.com/mnott/AIBroker) for full MCP setup instructions.
 
 ---
 
@@ -497,7 +497,7 @@ Restart Claude Code to apply.
 ## Requirements
 
 - Node.js >= 18
-- [AIBroker](https://www.npmjs.com/package/aibroker) daemon running (required)
+- [AIBroker](https://github.com/mnott/AIBroker) daemon running (required)
 - Telegram account with API credentials
 - macOS with [iTerm2](https://iterm2.com/)
 - [ffmpeg](https://ffmpeg.org/) for TTS voice note sending
