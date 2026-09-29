@@ -108,6 +108,10 @@ end tell`;
  * it back as a Telegram photo.
  */
 export async function handleScreenshot(): Promise<void> {
+  if (process.platform !== "darwin") {
+    await watcherSendMessage("/ss is only supported on macOS (needs iTerm2 and screencapture).").catch(() => {});
+    return;
+  }
   await watcherSendMessage("Capturing screenshot...").catch(() => {});
 
   // Check if screen is locked

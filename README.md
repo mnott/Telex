@@ -402,12 +402,30 @@ node dist/index.js watch
 ### launchd setup (auto-start)
 
 ```bash
-scripts/watcher-ctl.sh start    # Install and start as launchd agent
-scripts/watcher-ctl.sh stop     # Stop and unload
-scripts/watcher-ctl.sh status   # Show running state
+telex service start    # Install and start as launchd agent
+telex service stop     # Stop and unload
+telex service status   # Show running state
 ```
 
 The agent uses `KeepAlive: true` and `ProcessType: Interactive`. The Interactive process type and `LimitLoadToSessionType: Aqua` are required so the adapter can access the macOS GUI session and call AppleScript to control iTerm2.
+
+### Linux
+
+`telex service` (a wrapper for `scripts/watcher-ctl.sh`, which git checkouts can run directly) detects Linux and manages a systemd **user** unit (`telex-watcher.service`) instead of launchd. No sudo is used.
+
+Prerequisites: Node.js 18+, systemd with a user session (`systemctl --user` works), the AIBroker hub running, and Telegram credentials in `~/.telex/credentials` or the environment.
+
+```bash
+npm install -g @tekmidian/telex
+telex service start    # write ~/.config/systemd/user/telex-watcher.service, enable --now
+telex service status
+telex service stop     # disable --now and remove the unit
+telex service unit    # write the unit only, do not start it
+```
+
+The unit runs with `UMask=0077` and `Restart=on-failure`. It captures `PATH` and every `AIBROKER_*` / `TELEX_*` variable from the shell that runs `start`, plus the Telegram credentials. Output goes to `~/.local/state/telex/watch.log` (0600, in a 0700 directory); `journalctl --user -u telex-watcher` shows unit events.
+
+By default a user service stops when you log out. To keep the watcher running, enable linger once: `loginctl enable-linger $USER` (`status` and `start` print this hint when linger is off). The `/ss` screenshot command needs macOS and iTerm2 and replies that it is unsupported on Linux.
 
 ---
 
@@ -438,7 +456,7 @@ The AIBroker daemon is not running. Start it first - Telex cannot function witho
 
 **"Adapter not connected" errors**
 
-The Telex adapter is not running or has not registered with the hub. Start it with `node dist/index.js watch` or use `scripts/watcher-ctl.sh start`.
+The Telex adapter is not running or has not registered with the hub. Start it with `node dist/index.js watch` or use `telex service start`.
 
 **Telegram authentication failed**
 
@@ -485,8 +503,8 @@ npx -y @tekmidian/telex uninstall
 
 This removes Telex from `~/.claude.json` and deletes credentials from `~/.telex/auth/`. To fully clean up:
 
-1. Stop the launchd agent: `scripts/watcher-ctl.sh stop`
-2. Remove the plist: `rm ~/Library/LaunchAgents/com.telex.watcher.plist` (filename may vary - check `scripts/watcher-ctl.sh` for the exact name)
+1. Stop the launchd agent: `telex service stop`
+2. Remove the plist: `rm ~/Library/LaunchAgents/com.telex.watcher.plist` (filename may vary - check `scripts/watcher-ctl.sh` in the package for the exact name)
 3. Run the uninstall command above to remove MCP config and auth
 4. Optionally remove `~/.telex/` entirely: `rm -r ~/.telex/`
 

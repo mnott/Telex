@@ -688,8 +688,8 @@ async function handleDeliver(
   reqId: string,
   params: Record<string, unknown>,
 ): Promise<void> {
-  // BrokerMessage is passed as a plain object
-  const msg = params as Record<string, unknown>;
+  // BrokerMessage is wrapped in { message: ... } by the hub
+  const msg = (params.message ?? params) as Record<string, unknown>;
   const type = String(msg.type ?? "text");
   const payload = (msg.payload ?? {}) as Record<string, unknown>;
   const text = String(payload.text ?? "");

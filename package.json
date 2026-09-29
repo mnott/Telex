@@ -1,6 +1,6 @@
 {
   "name": "@tekmidian/telex",
-  "version": "0.2.5",
+  "version": "0.3.0",
   "description": "Telegram MCP bridge for Claude Code — bidirectional self-chat via MTProto",
   "type": "module",
   "bin": {
@@ -9,6 +9,7 @@
   "main": "dist/index.js",
   "files": [
     "dist",
+    "scripts/watcher-ctl.sh",
     "README.md",
     "LICENSE"
   ],
@@ -20,12 +21,10 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
-    "aibroker": "^0.2.6",
+    "aibroker": "^0.61.0",
     "pino": "^9.0.0",
     "qrcode-terminal": "^0.12.0",
-    "telegram": "^2.26.0",
-    "zod": "^3.23.0"
+    "telegram": "^2.26.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

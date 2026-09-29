@@ -239,6 +239,7 @@ export async function connectWatcher(
       apiHash,
       { connectionRetries: 5 },
     );
+    newClient.setLogLevel("none" as any);
     setWatcherClient(newClient);
     await startClient();
   }
@@ -258,6 +259,11 @@ async function loginWithQrCode(client: TelegramClient): Promise<void> {
       { apiId: client.apiId, apiHash: client.apiHash },
       {
         qrCode: async (qrCode: { token: Buffer; expires: number }) => {
+          // The token authorizes a login; never write it to a daemon log file.
+          if (!process.stderr.isTTY) {
+            log("QR login needs an interactive terminal (stderr is not a TTY) — run `telex watch` in a shell");
+            return;
+          }
           // Encode token as base64url for tg:// URI
           const tokenBase64 = qrCode.token
             .toString("base64")
