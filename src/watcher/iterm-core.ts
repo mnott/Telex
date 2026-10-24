@@ -2,7 +2,7 @@
 export {
   runAppleScript,
   stripItermPrefix,
-  withSessionAppleScript,
+  withSessionJxa,
   sendKeystrokeToSession,
   sendEscapeSequenceToSession,
   typeIntoSession,
