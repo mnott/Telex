@@ -20,8 +20,11 @@ Tell Claude Code:
 Or, without cloning:
 
 ```bash
-npx -y @tekmidian/telex setup
+npm i -g https://github.com/mnott/Telex/releases/latest/download/telex.tgz
+telex setup
 ```
+
+Update: `pai update --package @tekmidian/telex`. The npm registry is no longer updated; releases come from GitHub.
 
 Restart Claude Code. Telex connects automatically from now on. It needs the AIBroker hub running, Node.js >= 18 and Telegram API credentials.
 
